@@ -2587,10 +2587,45 @@ namespace video {
     // fallback options, we may need to allow more retries
     // to try applying each set.
     avcodec_ctx_t ctx;
-    for (int retries = 0; retries < 2; retries++) {
+    // Media Foundation encoders on legacy Intel GPUs (Ivy Bridge / HD 4000 and
+    // similar) cannot encode frames wider than 1920 pixels or taller than 1920
+    // pixels: the MFT rejects such an output type with MF_E_INVALIDMEDIATYPE and
+    // the encoder can never be opened.  A client asking for more (phones often
+    // request 2400x1080) would then fail every session attempt.  When opening an
+    // *_mf codec fails, retry with the request scaled down to the limit,
+    // preserving the client's aspect ratio.  The retry only engages after a real
+    // failure, so encoders whose MFT supports larger frames are unaffected.
+    //
+    // MF encoders also get extra attempts: the Intel QSV MFT fails the first
+    // SetOutputType() calls of an epoch while it arms the driver (up to three
+    // consecutive failures were observed in a fresh process), and MF codecs
+    // carry no fallback options that would otherwise trigger a retry.  Retries
+    // are spaced out because the MFT is briefly unavailable right after a failed
+    // open (back-to-back attempts fail where a short gap succeeds).
+    constexpr int mf_dimension_limit = 1920;
+    const bool mf_codec = video_format.name.size() > 3 && video_format.name.substr(video_format.name.size() - 3) == "_mf";
+    const bool mf_clamp_available = mf_codec && (config.width > mf_dimension_limit || config.height > mf_dimension_limit);
+    const int max_retries = mf_codec ? 6 : 2;
+
+    // Allow up to 1 retry to apply the set of fallback options (MF encoders get
+    // the extra attempts allocated in max_retries above).
+    //
+    // Note: If we later end up needing multiple sets of
+    // fallback options, we may need to allow more retries
+    // to try applying each set.
+    for (int retries = 0; retries < max_retries; retries++) {
       ctx.reset(avcodec_alloc_context3(codec));
-      ctx->width = config.width;
-      ctx->height = config.height;
+      if (retries > 0 && mf_clamp_available) {
+        const auto scale = std::min(static_cast<double>(mf_dimension_limit) / config.width, static_cast<double>(mf_dimension_limit) / config.height);
+        ctx->width = static_cast<int>(config.width * scale) & ~1;
+        ctx->height = static_cast<int>(config.height * scale) & ~1;
+        BOOST_LOG(warning) << video_format.name << ": requested "sv << config.width << 'x' << config.height
+                           << " exceeds the "sv << mf_dimension_limit << " pixel Media Foundation encoder limit, using "sv
+                           << ctx->width << 'x' << ctx->height << " instead"sv;
+      } else {
+        ctx->width = config.width;
+        ctx->height = config.height;
+      }
 
       // Use fractional framerate if available (for NTSC support)
       if (config.frameRateNum > 0 && config.frameRateDen > 0) {
@@ -2830,10 +2865,15 @@ namespace video {
       if (auto status = avcodec_open2(ctx.get(), codec, &options)) {
         char err_str[AV_ERROR_MAX_STRING_SIZE] { 0 };
 
-        if (!video_format.fallback_options.empty() && retries == 0) {
+        if (retries + 1 < max_retries && (!video_format.fallback_options.empty() || mf_codec)) {
           BOOST_LOG(info)
-            << "Retrying with fallback configuration options for ["sv << video_format.name << "] after error: "sv
+            << "Retrying "sv << video_format.name << " (attempt "sv << (retries + 2) << '/' << max_retries
+            << ") after error: "sv
             << av_make_error_string(err_str, AV_ERROR_MAX_STRING_SIZE, status);
+
+          // The MFT is briefly unavailable right after a failed open: wait a
+          // moment instead of retrying back-to-back.
+          std::this_thread::sleep_for(250ms);
 
           continue;
         }

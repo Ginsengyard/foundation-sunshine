@@ -197,6 +197,28 @@ probe_encoders_with_watchdog() {
 
 int
 main(int argc, char *argv[]) {
+#ifdef _WIN32
+  // Hold a Media Foundation platform reference for the lifetime of the process.
+  //
+  // The Intel QSV H.264 encoder MFT (Ivy Bridge and similar) fails the first
+  // IMFTransform::SetOutputType() calls of every MFStartup() epoch with
+  // MF_E_INVALIDMEDIATYPE; those calls only arm the driver.  FFmpeg's mfenc
+  // wraps every encoder open in MFStartup()/MFShutdown(), so every open would
+  // otherwise start a fresh epoch and the hardware encoder could never open.
+  {
+    static bool mf_platform_held = false;
+    if (!mf_platform_held) {
+      mf_platform_held = true;
+      if (auto mfplat = LoadLibraryW(L"mfplat.dll")) {
+        using mf_startup_t = long(__stdcall *)(unsigned long, unsigned long);
+        if (auto mf_startup = reinterpret_cast<mf_startup_t>(GetProcAddress(mfplat, "MFStartup"))) {
+          mf_startup(0x20070 /* MF_VERSION */, 0 /* MFSTARTUP_FULL */);
+        }
+      }
+    }
+  }
+#endif
+
   lifetime::argv = argv;
 
   task_pool_util::TaskPool::task_id_t force_shutdown = nullptr;
