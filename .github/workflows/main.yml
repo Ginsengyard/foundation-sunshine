@@ -250,7 +250,7 @@ jobs:
           # Fork PRs still try every public dependency. Keep the build usable
           # when a release asset is temporarily unavailable; official builds
           # continue to require the complete driver set.
-          DRIVER_DEPS_REQUIRED: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) && 'OFF' || 'ON' }}
+          DRIVER_DEPS_REQUIRED: ${{ (github.repository == 'AlkaidLab/foundation-sunshine' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'AlkaidLab/foundation-sunshine')) && 'ON' || 'OFF' }}
         run: |
           mkdir -p build
           ccache --zero-stats
