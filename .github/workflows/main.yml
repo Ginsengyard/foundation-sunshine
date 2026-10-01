@@ -351,17 +351,29 @@ jobs:
         uses: actions/cache@v6
         with:
           path: C:\Program Files (x86)\Inno Setup 6
-          key: inno-setup-6
+          key: inno-setup-6-v2
 
       - name: Install Inno Setup
         if: steps.inno-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          # Download and install Inno Setup 6 (silent install)
-          $url = "https://jrsoftware.org/download.php/is.exe"
-          $installer = "$env:TEMP\innosetup.exe"
-          Invoke-WebRequest -Uri $url -OutFile $installer
-          Start-Process -FilePath $installer -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-' -Wait
+          # Install Inno Setup 6. Chocolatey first (preinstalled on the runner),
+          # then winget, then the official download - jrsoftware.org sometimes
+          # refuses connections coming from CI IP ranges.
+          $target = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          try { choco install innosetup -y --no-progress } catch { Write-Host "choco failed: $($_.Exception.Message)" }
+          if (-not (Test-Path $target)) {
+            try { winget install --id JRSoftware.InnoSetup --silent --accept-package-agreements --accept-source-agreements } catch { Write-Host "winget failed: $($_.Exception.Message)" }
+          }
+          if (-not (Test-Path $target)) {
+            try {
+              $installer = "$env:TEMP\innosetup.exe"
+              Invoke-WebRequest -Uri "https://jrsoftware.org/download.php/is.exe" -OutFile $installer -MaximumRetryCount 3 -RetryIntervalSec 5
+              Start-Process -FilePath $installer -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-' -Wait
+            } catch { Write-Host "direct download failed: $($_.Exception.Message)" }
+          }
+          if (-not (Test-Path $target)) { throw "Inno Setup could not be installed" }
+          Write-Host "Inno Setup ready: $target"
 
       - name: Add Inno Setup to PATH
         shell: pwsh
