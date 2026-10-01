@@ -1453,6 +1453,75 @@ namespace video {
   // private struct, which would silently break on any FFmpeg ABI change.
 #endif
 
+#ifdef _WIN32
+  /**
+   * @brief Media Foundation (Windows).
+   *
+   * On legacy Intel GPUs (Ivy Bridge / HD 4000 and similar) this is the only
+   * working hardware path: oneVPL refuses those generations, while the Intel
+   * Media Foundation H.264 MFT is still shipped by the driver.
+   */
+  encoder_t mediafoundation {
+    "mediafoundation"sv,
+    std::make_unique<encoder_platform_formats_avcodec>(
+      AV_HWDEVICE_TYPE_D3D11VA,
+      AV_HWDEVICE_TYPE_NONE,
+      AV_PIX_FMT_D3D11,
+      AV_PIX_FMT_NV12,  // SDR 4:2:0 8-bit
+      AV_PIX_FMT_NONE,  // No HDR - the MF MFT only takes 8-bit
+      AV_PIX_FMT_NONE,  // No YUV444 SDR
+      AV_PIX_FMT_NONE,  // No YUV444 HDR
+      dxgi_init_avcodec_hardware_input_buffer
+    ),
+    {
+      // Common options for AV1
+      {
+        {"hw_encoding"s, 1},
+        {"rate_control"s, "cbr"s},
+        {"scenario"s, "display_remoting"s},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "av1_mf"s,
+      {},  // capabilities
+    },
+    {
+      // Common options for HEVC
+      {
+        {"hw_encoding"s, 1},
+        {"rate_control"s, "cbr"s},
+        {"scenario"s, "display_remoting"s},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "hevc_mf"s,
+      {},  // capabilities
+    },
+    {
+      // Common options for H.264
+      {
+        {"hw_encoding"s, 1},
+        {"rate_control"s, "cbr"s},
+        {"scenario"s, "display_remoting"s},
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "h264_mf"s,
+      {},  // capabilities
+    },
+    PARALLEL_ENCODING
+  };
+#endif
+
   encoder_t software {
     "software"sv,
     std::make_unique<encoder_platform_formats_avcodec>(
@@ -1699,6 +1768,7 @@ namespace video {
 #ifdef _WIN32
     &quicksync,
     &amdvce,
+    &mediafoundation,
 #endif
 #ifdef __linux__
     &vaapi,
